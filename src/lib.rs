@@ -1,5 +1,4 @@
-use std::{cmp::Ordering, ops::Deref};
-
+use std::cell::RefCell;
 use serde::{Deserialize, Serialize};
 use worker::*;
 
@@ -16,54 +15,43 @@ fn log_request(req: &Request) {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Bar {
-    result: Vec<(String, String)>,
+struct EmojiList {
+    value: Vec<String>,
 }
 
-struct OrderableKey(worker::kv::Key);
+struct ListManager {
+    kv_emojis: worker::kv::KvStore,
+    mut_value: RefCell<Vec<String>>,
+}
 
-impl Deref for OrderableKey {
-    type Target = worker::kv::Key;
+impl ListManager {
+    async fn new(ctx: &RouteContext<()>) -> Result<Self> {
+        let kv_emojis = ctx.kv("EMOJIS")?;
+        let list: EmojiList = kv_emojis.get("list").json().await?.ok_or("Couldn't fetch list")?;
+        let mut_value = RefCell::new(list.value);
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+        Ok(Self { kv_emojis, mut_value })
+    }
+
+    async fn update(&self) -> Result<()> {
+        let value_str = self.get_str()?;
+        let _ = self.kv_emojis.put("list", value_str)?.execute().await?;
+
+        Ok(())
+    }
+
+    fn end_with_response(&self) -> std::result::Result<worker::Response, worker::Error> {
+        let value_str = self.get_str()?;
+        Response::ok(value_str)
+    }
+
+    fn get_str(&self) -> Result<String> {
+        let list = EmojiList { value: self.mut_value.borrow().to_vec() };
+        let value_str = serde_json::to_string(&list)?;
+
+        Ok(value_str)
     }
 }
-
-impl Into<OrderableKey> for worker::kv::Key {
-    fn into(self) -> OrderableKey {
-        OrderableKey(self)
-    }
-}
-
-impl Ord for OrderableKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let self_key: u16 = self.0.name.parse().unwrap();
-        let other_key: u16 = other.0.name.parse().unwrap();
-
-        self_key.cmp(&other_key)
-    }
-}
-
-impl PartialOrd for OrderableKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let self_key: u16 = self.0.name.parse().unwrap();
-        let other_key: u16 = other.0.name.parse().unwrap();
-        
-        self_key.partial_cmp(&other_key)
-    }
-}
-
-impl PartialEq for OrderableKey {
-    fn eq(&self, other: &Self) -> bool {
-        let self_key: u16 = self.0.name.parse().unwrap();
-        let other_key: u16 = other.0.name.parse().unwrap();
-        
-        self_key == other_key
-    }
-}
-
-impl Eq for OrderableKey { }
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
@@ -81,61 +69,60 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
     // functionality and a `RouteContext` which you can use to  and get route parameters and
     // Environment bindings like KV Stores, Durable Objects, Secrets, and Variables.
     router
+        .get_async("/debug", |mut _req, ctx| async move {
+            let manager = ListManager::new(&ctx).await?;
+            let value = manager.mut_value.borrow();
+
+            Response::ok(format!("Here you are: {:?}", value))
+        })
+        .get_async("/list", |_req, ctx| async move {
+            let manager = ListManager::new(&ctx).await?;
+            manager.end_with_response()
+        })
         .post_async("/add", |mut req, ctx| async move {
-            let kv_emojis = &ctx.kv("EMOJIS")?;
+            let form = req.form_data().await?;
+            
+            match form.get("content") {
+                Some(FormEntry::Field(content)) => {
+                    let manager = ListManager::new(&ctx).await?;
+
+                    manager.mut_value.borrow_mut().push(content);
+                    manager.update().await?;
+
+                    manager.end_with_response()
+                }
+                _ => Response::error("Couldn't add content", 400)
+            }
+        })
+        .post_async("/move", |mut req, ctx| async move {
             let form = req.form_data().await?;
 
-            match form.get("content") {
-                Some(FormEntry::Field(value)) => {
-                    let last_key: Option<OrderableKey> = kv_emojis.list().execute().await?.keys.into_iter().map(|key| key.into()).max();
-                    let last_key = match last_key {
-                        Some(key) => key.clone().name,
-                        None => String::from("0"),
-                    };
-                    let next_key = (&last_key.parse::<u16>().unwrap() + 1).to_string();
+            match form.get("content").zip(form.get("index")) {
+                Some((FormEntry::Field(content), FormEntry::Field(index))) => {
+                    let manager = ListManager::new(&ctx).await?;
+                    
+                    manager.mut_value.borrow_mut().insert(index.parse().or(Err("Failed to parse"))?, content);
+                    manager.update().await?;
 
-                    kv_emojis.put(next_key.as_str(), &value).unwrap().execute().await?;
-                    Response::empty()
-                },
-                _ => Response::error("Bad Request", 400),
-            }
-        })
-        .get_async("/get/:key", |_, ctx| async move {
-            if let Some(key) = ctx.param("key") {
-                let emoji = &ctx.kv("EMOJIS")?.get(key).text().await?.unwrap();
-                Response::ok(emoji)
-            } else {
-                Response::error("Bad Request", 400)
-            }
-        })
-        .get_async("/delete/:key", |_, ctx| async move {
-            let kv_emojis = &ctx.kv("EMOJIS")?;
-
-            if let Some(key) = ctx.param("key") {
-                kv_emojis.delete(key).await?;
-            }
-
-            Response::empty()
-        })
-        .get_async("/list", |_, ctx| async move {
-            let emojis = &ctx.kv("EMOJIS")?;
-            let keys = emojis.list().execute().await?.keys;
-            
-            let mut map = Vec::new();
-
-            for key in keys {
-                let key = key.name;
-                let value = emojis.get(key.as_str()).text().await?;
-
-                if let Some(value) = value {
-                    map.push((key, value));
+                    manager.end_with_response()
                 }
+                _ => Response::error("Couldn't move content", 400)
             }
+        })
+        .post_async("/delete", |mut req, ctx| async move {
+            let form = req.form_data().await?;
 
-            map.sort_by_key(|k| k.0.parse::<u16>().unwrap_or_default());
+            match form.get("index") {
+                Some(FormEntry::Field(index)) => {
+                    let manager = ListManager::new(&ctx).await?;
 
-            let result = Bar { result: map };
-            Response::from_json(&result)
+                    manager.mut_value.borrow_mut().remove(index.parse().or(Err("Failed to parse"))?);
+                    manager.update().await?;
+
+                    manager.end_with_response()
+                }
+                _ => Response::error("Couldn't delete content", 400)
+            }
         })
         .run(req, env)
         .await

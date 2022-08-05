@@ -14,28 +14,30 @@ fn log_request(req: &Request) {
     );
 }
 
+const KV_BINDING: &str = "EMOJIS";
+
 #[derive(Serialize, Deserialize)]
 struct EmojiList {
     value: Vec<String>,
 }
 
 struct ListManager {
-    kv_emojis: worker::kv::KvStore,
+    kv_store: worker::kv::KvStore,
     mut_value: RefCell<Vec<String>>,
 }
 
 impl ListManager {
     async fn new(ctx: &RouteContext<()>) -> Result<Self> {
-        let kv_emojis = ctx.kv("EMOJIS")?;
-        let list: EmojiList = kv_emojis.get("list").json().await?.ok_or("Couldn't fetch list")?;
+        let kv_store = ctx.kv(KV_BINDING)?;
+        let list: EmojiList = kv_store.get("list").json().await?.ok_or("Couldn't fetch list")?;
         let mut_value = RefCell::new(list.value);
 
-        Ok(Self { kv_emojis, mut_value })
+        Ok(Self { kv_store, mut_value })
     }
 
     async fn update(&self) -> Result<()> {
         let value_str = self.get_str()?;
-        let _ = self.kv_emojis.put("list", value_str)?.execute().await?;
+        let _ = self.kv_store.put("list", value_str)?.execute().await?;
 
         Ok(())
     }
@@ -50,6 +52,40 @@ impl ListManager {
         let value_str = serde_json::to_string(&list)?;
 
         Ok(value_str)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Accounts {
+    value: Vec<Account>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Account {
+    username: String,
+    password: String,
+}
+
+enum AuthState {
+    Ok,
+    Err(std::result::Result<worker::Response, worker::Error>),
+}
+
+async fn auth(form: &FormData, ctx: &RouteContext<()>) -> Result<AuthState> {
+    match form.get("username").zip(form.get("password")) {
+        Some((FormEntry::Field(username), FormEntry::Field(password))) => {
+            let kv_store = ctx.kv(KV_BINDING)?;
+            let accounts: Accounts = kv_store.get("accounts").json().await?.ok_or("Couldn't fetch accounts")?;
+
+            match accounts.value.iter().find(|x| x.username == username) {
+                Some(account) => Ok(
+                    if account.password == password { AuthState::Ok }
+                    else { AuthState::Err(Response::error("Invalid password", 401)) }
+                ),
+                None => Ok(AuthState::Err(Response::error("Invalid username", 401))),
+            }
+        }
+        _ => Ok(AuthState::Err(Response::error("Invalid parameter", 401)))
     }
 }
 
@@ -81,6 +117,11 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         })
         .post_async("/add", |mut req, ctx| async move {
             let form = req.form_data().await?;
+
+            match auth(&form, &ctx).await? {
+                AuthState::Ok => (),
+                AuthState::Err(err) => return err
+            }
             
             match form.get("content") {
                 Some(FormEntry::Field(content)) => {
@@ -97,6 +138,11 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         .post_async("/move", |mut req, ctx| async move {
             let form = req.form_data().await?;
 
+            match auth(&form, &ctx).await? {
+                AuthState::Ok => (),
+                AuthState::Err(err) => return err
+            }
+
             match form.get("content").zip(form.get("index")) {
                 Some((FormEntry::Field(content), FormEntry::Field(index))) => {
                     let manager = ListManager::new(&ctx).await?;
@@ -111,6 +157,11 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         })
         .post_async("/delete", |mut req, ctx| async move {
             let form = req.form_data().await?;
+
+            match auth(&form, &ctx).await? {
+                AuthState::Ok => (),
+                AuthState::Err(err) => return err
+            }
 
             match form.get("index") {
                 Some(FormEntry::Field(index)) => {

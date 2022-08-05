@@ -105,15 +105,17 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
     // functionality and a `RouteContext` which you can use to  and get route parameters and
     // Environment bindings like KV Stores, Durable Objects, Secrets, and Variables.
     router
-        .get_async("/debug", |mut _req, ctx| async move {
-            let manager = ListManager::new(&ctx).await?;
-            let value = manager.mut_value.borrow();
-
-            Response::ok(format!("Here you are: {:?}", value))
-        })
         .get_async("/list", |_req, ctx| async move {
             let manager = ListManager::new(&ctx).await?;
             manager.end_with_response()
+        })
+        .post_async("/auth", |mut req, ctx| async move {
+            let form = req.form_data().await?;
+            
+            match auth(&form, &ctx).await? {
+                AuthState::Ok => Response::empty(),
+                AuthState::Err(err) => err,
+            }
         })
         .post_async("/add", |mut req, ctx| async move {
             let form = req.form_data().await?;

@@ -16,6 +16,22 @@ fn log_request(req: &Request) {
 
 const KV_BINDING: &str = "EMOJIS";
 
+trait CustomizedResponse {
+    fn into_customized(self) -> Result<Response>;
+}
+
+impl CustomizedResponse for Response {
+    fn into_customized(self) -> Result<Response> {
+        let cors = Cors::new()
+            .with_origins(["*"])
+            .with_methods([Method::Get, Method::Post, Method::Options])
+            .with_max_age(86400)
+            .with_allowed_headers(["Content-Type"]);
+
+        self.with_cors(&cors)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct EmojiList {
     value: Vec<String>,
@@ -42,9 +58,9 @@ impl ListManager {
         Ok(())
     }
 
-    fn end_with_response(&self) -> std::result::Result<worker::Response, worker::Error> {
+    fn end_with_response(&self) -> Result<Response> {
         let value_str = self.get_str()?;
-        Response::ok(value_str)
+        Response::ok(value_str)?.into_customized()
     }
 
     fn get_str(&self) -> Result<String> {
@@ -68,7 +84,7 @@ struct Account {
 
 enum AuthState {
     Ok,
-    Err(std::result::Result<worker::Response, worker::Error>),
+    Err(Result<Response>),
 }
 
 async fn auth(form: &FormData, ctx: &RouteContext<()>) -> Result<AuthState> {
@@ -113,7 +129,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
             let form = req.form_data().await?;
             
             match auth(&form, &ctx).await? {
-                AuthState::Ok => Response::empty(),
+                AuthState::Ok => Response::empty()?.into_customized(),
                 AuthState::Err(err) => err,
             }
         })

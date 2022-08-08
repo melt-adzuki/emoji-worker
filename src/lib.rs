@@ -161,11 +161,19 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
                 AuthState::Err(err) => return err
             }
 
-            match form.get("content").zip(form.get("index")) {
-                Some((FormEntry::Field(content), FormEntry::Field(index))) => {
+            match form.get("from").zip(form.get("to")) {
+                Some((FormEntry::Field(from), FormEntry::Field(to))) => {
                     let manager = ListManager::new(&ctx).await?;
-                    
-                    manager.mut_value.borrow_mut().insert(index.parse().or(Err("Failed to parse"))?, content);
+                    let indexes: (usize, usize) = from.parse().ok().zip(to.parse().ok()).ok_or("Failed to parse")?;
+
+                    if indexes.0.max(indexes.1) + 1 > manager.mut_value.borrow_mut().len() {
+                        return Response::error("Out of index", 400);
+                    }
+                
+                    let element = (&manager.mut_value.borrow_mut()[indexes.0]).to_string();
+
+                    manager.mut_value.borrow_mut().remove(indexes.0);
+                    manager.mut_value.borrow_mut().insert(indexes.1, element);
                     manager.update().await?;
 
                     manager.end_with_response()

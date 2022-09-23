@@ -1,4 +1,4 @@
-use super::consts::KV_BINDING;
+use super::consts::{KV_BINDING, msgs};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use worker::*;
@@ -16,7 +16,7 @@ pub struct ListManager {
 impl ListManager {
     pub async fn new(ctx: &RouteContext<()>) -> Result<Self> {
         let kv_store = ctx.kv(KV_BINDING)?;
-        let list: EmojiList = kv_store.get("list").json().await?.ok_or("Couldn't fetch list")?;
+        let list: EmojiList = kv_store.get("list").json().await?.ok_or(msgs::ERR_LIST_FETCH)?;
         let mut_value = RefCell::new(list.value);
 
         Ok(Self { kv_store, mut_value })

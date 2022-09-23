@@ -7,6 +7,7 @@ mod auth;
 use worker::*;
 use list::{ListManager, CustomizedResponse};
 use auth::{Auth, AuthState};
+use consts::msgs;
 
 fn log_request(req: &Request) {
     console_log!(
@@ -63,7 +64,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
 
                     manager.end_with_response()
                 }
-                _ => Response::error("Couldn't add content", 400)
+                _ => Response::error(msgs::ERR_ADD, 400)
             }
         })
         .post_async("/move", |mut req, ctx| async move {
@@ -77,10 +78,10 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
             match form.get("from").zip(form.get("to")) {
                 Some((FormEntry::Field(from), FormEntry::Field(to))) => {
                     let manager = ListManager::new(&ctx).await?;
-                    let indexes: (usize, usize) = from.parse().ok().zip(to.parse().ok()).ok_or("Failed to parse")?;
+                    let indexes: (usize, usize) = from.parse().ok().zip(to.parse().ok()).ok_or(msgs::ERR_PARSE)?;
 
                     if indexes.0.max(indexes.1) + 1 > manager.mut_value.borrow_mut().len() {
-                        return Response::error("Out of index", 400);
+                        return Response::error(msgs::ERR_OUT_OF_INDEX, 400);
                     }
                 
                     let element = (&manager.mut_value.borrow_mut()[indexes.0]).to_string();
@@ -91,7 +92,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
 
                     manager.end_with_response()
                 }
-                _ => Response::error("Couldn't move content", 400)
+                _ => Response::error(msgs::ERR_MOVE, 400)
             }
         })
         .post_async("/delete", |mut req, ctx| async move {
@@ -106,12 +107,12 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
                 Some(FormEntry::Field(index)) => {
                     let manager = ListManager::new(&ctx).await?;
 
-                    manager.mut_value.borrow_mut().remove(index.parse().or(Err("Failed to parse"))?);
+                    manager.mut_value.borrow_mut().remove(index.parse().or(Err(msgs::ERR_PARSE))?);
                     manager.update().await?;
 
                     manager.end_with_response()
                 }
-                _ => Response::error("Couldn't delete content", 400)
+                _ => Response::error(msgs::ERR_DELETE, 400)
             }
         })
         .run(req, env)

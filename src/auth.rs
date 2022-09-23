@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use super::acct::Accounts;
-use super::consts::KV_BINDING;
+use super::consts::{KV_BINDING, msgs};
+use async_trait::async_trait;
 use worker::*;
 
 pub enum AuthState {
@@ -19,17 +19,17 @@ impl Auth for FormData {
         match self.get("username").zip(self.get("password")) {
             Some((FormEntry::Field(username), FormEntry::Field(password))) => {
                 let kv_store = ctx.kv(KV_BINDING)?;
-                let accounts: Accounts = kv_store.get("accounts").json().await?.ok_or("Couldn't fetch accounts")?;
+                let accounts: Accounts = kv_store.get("accounts").json().await?.ok_or(msgs::ERR_AUTH_FETCHING_ACCOUNTS)?;
     
                 match accounts.value.iter().find(|acct| acct.username == username) {
                     Some(acct) => Ok(
                         if acct.password == password { AuthState::Ok }
-                        else { AuthState::Err(Response::error("Invalid password", 401)) }
+                        else { AuthState::Err(Response::error(msgs::ERR_AUTH_INVALID_PARAM, 401)) }
                     ),
-                    None => Ok(AuthState::Err(Response::error("Invalid username", 401))),
+                    None => Ok(AuthState::Err(Response::error(msgs::ERR_AUTH_INVALID_PARAM, 401))),
                 }
             }
-            _ => Ok(AuthState::Err(Response::error("Invalid parameter", 401)))
+            _ => Ok(AuthState::Err(Response::error(msgs::ERR_AUTH_INVALID_PARAM, 401)))
         }
     }
 }

@@ -6,7 +6,7 @@ mod auth;
 
 use worker::*;
 use list::{ListManager, CustomizedResponse};
-use auth::{AuthState, auth};
+use auth::{Auth, AuthState};
 
 fn log_request(req: &Request) {
     console_log!(
@@ -41,7 +41,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         .post_async("/auth", |mut req, ctx| async move {
             let form = req.form_data().await?;
             
-            match auth(&form, &ctx).await? {
+            match form.auth(&ctx).await? {
                 AuthState::Ok => Response::empty()?.into_customized(),
                 AuthState::Err(err) => err,
             }
@@ -49,7 +49,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         .post_async("/add", |mut req, ctx| async move {
             let form = req.form_data().await?;
 
-            match auth(&form, &ctx).await? {
+            match form.auth(&ctx).await? {
                 AuthState::Ok => (),
                 AuthState::Err(err) => return err
             }
@@ -69,7 +69,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         .post_async("/move", |mut req, ctx| async move {
             let form = req.form_data().await?;
 
-            match auth(&form, &ctx).await? {
+            match form.auth(&ctx).await? {
                 AuthState::Ok => (),
                 AuthState::Err(err) => return err
             }
@@ -97,7 +97,7 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
         .post_async("/delete", |mut req, ctx| async move {
             let form = req.form_data().await?;
 
-            match auth(&form, &ctx).await? {
+            match form.auth(&ctx).await? {
                 AuthState::Ok => (),
                 AuthState::Err(err) => return err
             }
